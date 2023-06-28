@@ -56,3 +56,7 @@ build/
 .vscode/
 
 node_modules/
+
+# Testing files
+test.js
+testdata.json
