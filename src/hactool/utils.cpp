@@ -272,7 +272,17 @@ const char *get_key_revision_summary(uint8_t key_rev) {
         case 9:
             return "9.0.0-9.0.1";
         case 0xA:
-            return "9.1.0-";
+            return "9.1.0-12.0.3";
+        case 0xB:
+            return "12.1.0";
+        case 0xC:
+            return "13.0.0-13.2.1";
+        case 0xD:
+            return "14.0.0-14.1.2";
+        case 0xE:
+            return "15.0.0-15.0.1";
+        case 0xF:
+            return "16.0.0-16.x.x";
         default:
             return "Unknown";
     }
