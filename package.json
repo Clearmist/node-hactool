@@ -2,6 +2,7 @@
   "name": "node-hactool",
   "version": "1.0.0",
   "description": "Node native module to access hactool.",
+  "keywords": ["hactool", "switch", "nintendo", "nca", "xci"],
   "main": "index.js",
   "scripts": {
     "build": "node-gyp rebuild",

@@ -159,7 +159,7 @@ enum hactool_file_type
 
 struct nca_ctx; /* This will get re-defined by nca.h. */
 
-typedef struct {
+struct hactool_ctx_t {
     enum hactool_file_type file_type;
     bool minified;
     cJSON *output;
@@ -171,8 +171,6 @@ typedef struct {
     struct nca_ctx *base_nca_ctx;
     hactool_settings_t settings;
     uint32_t action;
-    // Napi::Env Env;
-    // Napi::Error Error;
-} hactool_ctx_t;
+};
 
 #endif

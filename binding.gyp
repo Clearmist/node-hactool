@@ -8,8 +8,6 @@
                 "<!@(node -p \"require('fs').readdirSync('./src/hactool').filter(f=>f.endsWith('.c') || f.endsWith('.cpp')).map(f=>'src/hactool/'+f).join(' ')\")",
                 "<!@(node -p \"require('fs').readdirSync('./src/hactool/mbedtls/library').filter(f=>f.endsWith('.c')).map(f=>'src/hactool/mbedtls/library/'+f).join(' ')\")"
             ],
-            'cflags!': ['-fno-exceptions'],
-            'cflags_cc!': ['-fno-exceptions'],
             'cflags_cc': ['-std:c++20'],
             'include_dirs': [
                 "<!(node -p \"require('node-addon-api').include_dir\")",
@@ -22,7 +20,6 @@
             'dependencies': [
                 "<!(node -p \"require('node-addon-api').gyp\")"
             ],
-            'defines': ['NAPI_DISABLE_CPP_EXCEPTIONS'],
             'conditions': [
                 [
                     "OS=='win'",

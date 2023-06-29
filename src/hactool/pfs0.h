@@ -1,6 +1,7 @@
 #ifndef HACTOOL_PFS0_H
 #define HACTOOL_PFS0_H
 
+#include <napi.h>
 #include "types.h"
 #include "utils.h"
 #include "npdm.h"
@@ -60,8 +61,8 @@ static inline char *pfs0_get_file_name(pfs0_header_t *hdr, uint32_t i) {
     return pfs0_get_string_table(hdr) + pfs0_get_file_entry(hdr, i)->string_table_offset;
 }
 
-void pfs0_process(pfs0_ctx_t *ctx);
-void pfs0_save(pfs0_ctx_t *ctx);
-void pfs0_print(pfs0_ctx_t *ctx);
+void pfs0_process(pfs0_ctx_t *ctx, Napi::Env Env);
+void pfs0_save(pfs0_ctx_t *ctx, Napi::Env Env);
+void pfs0_print(pfs0_ctx_t *ctx, Napi::Env Env);
 
 #endif

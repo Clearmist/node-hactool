@@ -34,7 +34,7 @@ char *finish(hactool_ctx_t *tool_ctx) {
     string = tool_ctx->minified ? cJSON_PrintUnformatted(tool_ctx->output) : cJSON_Print(tool_ctx->output);
 
     if (string == NULL) {
-        return "Failed to encode the JSON string.";
+        return "{\"error\": true, \"errorMessage\": \"Failed to encode the JSON string when finishing.\"}";
     }
 
     return string;
@@ -42,14 +42,8 @@ char *finish(hactool_ctx_t *tool_ctx) {
 
 // Add the error message then call the finish function.
 char *stop(hactool_ctx_t *tool_ctx, char *text) {
-    char *string = NULL;
-
-    cJSON_AddItemToObject(tool_ctx->output, "error", cJSON_CreateTrue());
-    cJSON_AddItemToObject(tool_ctx->output, "errorMessage", cJSON_CreateString(text));
-
-    if (string == NULL) {
-        return "Failed to encode the JSON string.";
-    }
+    cJSON_ReplaceItemInObjectCaseSensitive(tool_ctx->output, "error", cJSON_CreateTrue());
+    cJSON_ReplaceItemInObjectCaseSensitive(tool_ctx->output, "errorMessage", cJSON_CreateString(text));
 
     return finish(tool_ctx);
 }
@@ -78,7 +72,6 @@ char *start(int argc, char **argv, Napi::Env Env) {
     nca_ctx.tool_ctx = &tool_ctx;
     nca_ctx.is_cli_target = true;
 
-    // nca_ctx.tool_ctx->Env = Env;
     nca_ctx.tool_ctx->file_type = FILETYPE_NCA;
     nca_ctx.tool_ctx->output = cJSON_CreateObject();
     nca_ctx.tool_ctx->warnings = cJSON_CreateArray();
@@ -279,7 +272,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 break;
             case 15:
                 if (nca_ctx.tool_ctx->base_file != NULL) {
-                    stop(nca_ctx.tool_ctx, "[baseromfs] The base file is not null.");
+                    return stop(nca_ctx.tool_ctx, "[baseromfs] The base file is not null.");
                 }
 
                 if ((nca_ctx.tool_ctx->base_file = fopen(optarg, "rb")) == NULL) {
@@ -290,7 +283,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 break;
             case 16:
                 if (nca_ctx.tool_ctx->base_file != NULL) {
-                    stop(nca_ctx.tool_ctx, "[basenca] The base file is not null.");
+                    return stop(nca_ctx.tool_ctx, "[basenca] The base file is not null.");
                 }
 
                 if ((nca_ctx.tool_ctx->base_file = fopen(optarg, "rb")) == NULL) {
@@ -356,7 +349,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 break;
             case 31:
                 if (nca_ctx.tool_ctx->base_file != NULL) {
-                    stop(nca_ctx.tool_ctx, "[basefake] The base file is not null.");
+                    return stop(nca_ctx.tool_ctx, "[basefake] The base file is not null.");
                 }
 
                 nca_ctx.tool_ctx->base_file_type = BASEFILE_FAKE;
@@ -435,8 +428,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 nca_ctx.tool_ctx->settings.suppress_keydata_output = 1;
                 break;
             default:
-                printf("%d", c);
-                stop(nca_ctx.tool_ctx, "Unknown parameter.");
+                return stop(nca_ctx.tool_ctx, "Unknown parameter.");
         }
     }
 
@@ -448,7 +440,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
     }
 
     FILE *homekeyfile = open_key_file((tool_ctx.action & ACTION_DEV) ? "dev" : "prod");
-return finish(nca_ctx.tool_ctx);
+
     if (homekeyfile == NULL) {
         addWarning(nca_ctx.tool_ctx, fmt::format("{}.keys does not exist.", (tool_ctx.action & ACTION_DEV) ? "dev" : "prod").data());
     } else if (keyfile == NULL) {
@@ -456,7 +448,7 @@ return finish(nca_ctx.tool_ctx);
     } else {
         fclose(homekeyfile);
     }
-return finish(nca_ctx.tool_ctx);
+
     if (keyfile != NULL) {
         extkeys_initialize_settings(&tool_ctx.settings, keyfile);
 
@@ -485,12 +477,11 @@ return finish(nca_ctx.tool_ctx);
 
         addLogLine(nca_ctx.tool_ctx, fmt::format("The source file is {}.", input_name).data());
     } else if (tool_ctx.file_type != FILETYPE_BOOT0 && ((optind < argc) || (argc == 1))) {
-        stop(nca_ctx.tool_ctx, "Provide a source file at the end of your arguments list.");
+        return stop(nca_ctx.tool_ctx, "Provide a source file at the end of your arguments list.");
     }
 
     cJSON_AddItemToObject(nca_ctx.tool_ctx->output, "source", cJSON_CreateString(input_name));
 
-return finish(nca_ctx.tool_ctx);
     /* Special case NAX0. */
     if (tool_ctx.file_type == FILETYPE_NAX0) {
         nax0_ctx_t nax_ctx;
@@ -563,7 +554,12 @@ return finish(nca_ctx.tool_ctx);
             memset(&pfs0_ctx, 0, sizeof(pfs0_ctx));
             pfs0_ctx.file = tool_ctx.file;
             pfs0_ctx.tool_ctx = &tool_ctx;
-            pfs0_process(&pfs0_ctx);
+
+            try {
+                pfs0_process(&pfs0_ctx, Env);
+            } catch (const Napi::Error& e) {
+                Napi::Error::New(Env, e.what()).ThrowAsJavaScriptException();
+            }
 
             if (pfs0_ctx.header) {
                 free(pfs0_ctx.header);
