@@ -192,7 +192,7 @@ typedef struct nca_ctx {
 } nca_ctx_t;
 
 void nca_init(nca_ctx_t *ctx);
-void nca_process(nca_ctx_t *ctx);
+void nca_process(nca_ctx_t *ctx, Napi::Env Env);
 int nca_decrypt_header(nca_ctx_t *ctx);
 void nca_decrypt_key_area(nca_ctx_t *ctx);
 void nca_print(nca_ctx_t *ctx);
@@ -200,25 +200,24 @@ void nca_print(nca_ctx_t *ctx);
 void nca_free_section_contexts(nca_ctx_t *ctx);
 
 void nca_section_fseek(nca_section_ctx_t *ctx, uint64_t offset);
-size_t nca_section_fread(nca_section_ctx_t *ctx, void *buffer, size_t count);
+size_t nca_section_fread(nca_section_ctx_t *ctx, void *buffer, size_t count, Napi::Env Env);
 
-void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_size, filepath_t *filepath);
+void nca_save_section_file(nca_section_ctx_t *ctx, uint64_t ofs, uint64_t total_size, filepath_t *filepath, Napi::Env Env);
 
-/* These have to be in nca.c, sadly... */
-void nca_process_pfs0_section(nca_section_ctx_t *ctx);
-void nca_process_ivfc_section(nca_section_ctx_t *ctx);
-void nca_process_nca0_romfs_section(nca_section_ctx_t *ctx);
-void nca_process_bktr_section(nca_section_ctx_t *ctx);
-void nca_print_pfs0_section(nca_section_ctx_t *ctx);
-void nca_print_ivfc_section(nca_section_ctx_t *ctx);
-void nca_print_nca0_romfs_section(nca_section_ctx_t *ctx);
-void nca_print_bktr_section(nca_section_ctx_t *ctx);
+void nca_process_pfs0_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_process_ivfc_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_process_nca0_romfs_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_process_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env);
 
+void nca_print_pfs0_section(nca_section_ctx_t *ctx, cJSON *section);
+void nca_print_ivfc_section(nca_section_ctx_t *ctx, cJSON *section);
+void nca_print_nca0_romfs_section(nca_section_ctx_t *ctx, cJSON *section);
+void nca_print_bktr_section(nca_section_ctx_t *ctx, cJSON *section);
 
-void nca_save_section(nca_section_ctx_t *ctx);
-void nca_save_pfs0_section(nca_section_ctx_t *ctx);
-void nca_save_ivfc_section(nca_section_ctx_t *ctx);
-void nca_save_nca0_romfs_section(nca_section_ctx_t *ctx);
-void nca_save_bktr_section(nca_section_ctx_t *ctx);
+void nca_save_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_save_pfs0_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_save_ivfc_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_save_nca0_romfs_section(nca_section_ctx_t *ctx, Napi::Env Env);
+void nca_save_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env);
 
 #endif

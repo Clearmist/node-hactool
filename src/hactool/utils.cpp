@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <ctype.h>
-#include <string.h>
+#include <string>
 #include <sys/stat.h>
+#define FMT_HEADER_ONLY
+#include <fmt/core.h>
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -76,6 +78,43 @@ void memdump(FILE *f, const char *prefix, const void *data, size_t size) {
 
         size -= max;
     }
+}
+
+char * memdump_return(const void *data, size_t size) {
+    const uint8_t *p = (const uint8_t *)data;
+
+    std::string result = "";
+
+    size_t offset = 0;
+    int first = 1;
+
+    while (size) {
+        unsigned int max = 32;
+
+        if (max > size) {
+            max = size;
+        }
+
+        std::string line = "";
+
+        for (unsigned int i = 0; i < max; i++) {
+            line = fmt::format("{}{:02X}", line, p[offset]);
+
+            offset++;
+        }
+
+        if (first) {
+            first = 0;
+
+            result = fmt::format("{}", line);
+        } else {
+            result = fmt::format("{}\n{}", result, line);
+        }
+
+        size -= max;
+    }
+
+    return result.data();
 }
 
 void save_buffer_to_file(void *buf, uint64_t size, struct filepath *filepath) {

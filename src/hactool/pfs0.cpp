@@ -1,9 +1,12 @@
 #include <string.h>
+#define FMT_HEADER_ONLY
 #include <fmt/core.h>
 #include "pfs0.h"
 #include "output.h"
 
 void pfs0_process(pfs0_ctx_t *ctx, Napi::Env Env) {
+    cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Processing PFS0 file."));
+
     /* Read *just* safe amount. */
     pfs0_header_t raw_header;
     fseeko64(ctx->file, 0, SEEK_SET);

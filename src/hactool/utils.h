@@ -36,6 +36,7 @@ uint64_t align64(uint64_t offset, uint64_t alignment);
 void print_magic(const char *prefix, uint32_t magic);
 char *return_magic(uint32_t magic);
 void memdump(FILE *f, const char *prefix, const void *data, size_t size);
+char * memdump_return(const void *data, size_t size);
 int strcasecmp(const char *a, const char *b);
 
 uint64_t _fsize(const char *filename);

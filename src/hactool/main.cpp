@@ -517,7 +517,18 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 memcpy(&base_ctx.settings.keyset, &tool_ctx.settings.keyset, sizeof(nca_keyset_t));
                 base_ctx.settings.known_titlekeys = tool_ctx.settings.known_titlekeys;
                 nca_ctx.tool_ctx->base_nca_ctx->tool_ctx = &base_ctx;
-                nca_process(nca_ctx.tool_ctx->base_nca_ctx);
+
+                try {
+                    nca_process(nca_ctx.tool_ctx->base_nca_ctx, Env);
+                } catch (const Napi::TypeError& e) {
+                    Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
+
+                    // Do not continue processing this file as a NCA type.
+                    break;
+                } catch (const Napi::Error& e) {
+                    return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
+                }
+
                 int found_romfs = 0;
 
                 for (unsigned int i = 0; i < 4; i++) {
@@ -533,7 +544,18 @@ char *start(int argc, char **argv, Napi::Env Env) {
             }
 
             nca_ctx.file = tool_ctx.file;
-            nca_process(&nca_ctx);
+
+            try {
+                nca_process(&nca_ctx, Env);
+            } catch (const Napi::TypeError& e) {
+                Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
+
+                // Do not continue processing this file as a NCA type.
+                break;
+            } catch (const Napi::Error& e) {
+                return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
+            }
+
             nca_free_section_contexts(&nca_ctx);
 
             if (nca_ctx.tool_ctx->base_file_type == BASEFILE_FAKE) {
