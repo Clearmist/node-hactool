@@ -93,8 +93,8 @@ typedef struct {
     uint8_t fake_compat_type;
 } xci_ctx_t;
 
-void xci_process(xci_ctx_t *ctx);
-void xci_save(xci_ctx_t *ctx);
-void xci_print(xci_ctx_t *ctx);
+void xci_process(xci_ctx_t *ctx, Napi::Env Env);
+void xci_save(xci_ctx_t *ctx, Napi::Env Env);
+void xci_print(xci_ctx_t *ctx, Napi::Env Env);
 
 #endif

@@ -25,16 +25,15 @@ static const unsigned char xci_header_pubk[0x100] = {
     0x9A, 0xC1, 0xDD, 0x62, 0x86, 0x9C, 0x2E, 0xE1, 0x2D, 0x6F, 0x62, 0x67, 0x51, 0x08, 0x0E, 0xCF
 };
 
-void xci_process(xci_ctx_t *ctx) {
+void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
     fseeko64(ctx->file, 0, SEEK_SET);
+
     if (fread(&ctx->header, 1, 0x200, ctx->file) != 0x200) {
-        fprintf(stderr, "Failed to read XCI header!\n");
-        return;
+        throw Napi::TypeError::New(Env, "Failed to read XCI header.");
     }
 
     if (ctx->header.magic != MAGIC_HEAD) {
-        fprintf(stderr, "Error: XCI header is corrupt!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::TypeError::New(Env, "The XCI header is corrupt.");
     }
 
     if (ctx->tool_ctx->action & ACTION_VERIFY) {
@@ -49,11 +48,11 @@ void xci_process(xci_ctx_t *ctx) {
         ctx->iv[i] = ctx->header.reversed_iv[0xF-i];
     }
 
-
-    // try to decrypt header data
+    // Try to decrypt the header data.
     unsigned char null_key[0x10];
     memset(null_key, 0x00, 0x10);
-    // test if the xci header key is set
+
+    // Test if the xci header key is set.
     if (memcmp(ctx->tool_ctx->settings.keyset.xci_header_key, null_key, 0x10) != 0) {
         aes_ctx_t *aes_ctx = new_aes_ctx(ctx->tool_ctx->settings.keyset.xci_header_key, 0x10, AES_MODE_CBC);
         aes_setiv(aes_ctx, ctx->iv, 0x10);
@@ -68,23 +67,27 @@ void xci_process(xci_ctx_t *ctx) {
     const uint8_t *compatiblity_type_ptr = NULL;
     ctx->has_fake_compat_type = 0;
     ctx->fake_compat_type = COMPAT_GLOBAL;
+
     if (ctx->has_decrypted_header) {
         xci_gamecard_info_t *gc_info = (xci_gamecard_info_t*)(ctx->decrypted_header + 0x10);
+
         if (gc_info->compatibility_type != 0) {
             compatiblity_type_ptr = &gc_info->compatibility_type;
         }
+
         ctx->hfs0_hash_validity = check_memory_hash_table_with_suffix(ctx->file, ctx->header.hfs0_header_hash, ctx->header.hfs0_offset, ctx->header.hfs0_header_size, ctx->header.hfs0_header_size, compatiblity_type_ptr, 0);
     } else {
         ctx->hfs0_hash_validity = check_memory_hash_table_with_suffix(ctx->file, ctx->header.hfs0_header_hash, ctx->header.hfs0_offset, ctx->header.hfs0_header_size, ctx->header.hfs0_header_size, compatiblity_type_ptr, 0);
+
         if (ctx->hfs0_hash_validity != VALIDITY_VALID) {
             ctx->has_fake_compat_type = 1;
             ctx->fake_compat_type = COMPAT_CHINA;
             compatiblity_type_ptr = &ctx->fake_compat_type;
             ctx->hfs0_hash_validity = check_memory_hash_table_with_suffix(ctx->file, ctx->header.hfs0_header_hash, ctx->header.hfs0_offset, ctx->header.hfs0_header_size, ctx->header.hfs0_header_size, compatiblity_type_ptr, 0);
         }
+
         if (ctx->hfs0_hash_validity != VALIDITY_VALID) {
-            fprintf(stderr, "Error: XCI partition is corrupt!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::TypeError::New(Env, "The XCI partition is corrupt.");
         }
     }
 
@@ -100,8 +103,7 @@ void xci_process(xci_ctx_t *ctx) {
     hfs0_process(&ctx->partition_ctx);
 
     if (ctx->partition_ctx.header->num_files > 4) {
-        fprintf(stderr, "Error: Invalid XCI partition!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::TypeError::New(Env, "Invalid XCI partition (The number of files is greater than 4).");
     }
 
     for (unsigned int i = 0; i < ctx->partition_ctx.header->num_files; i++)  {
@@ -109,6 +111,7 @@ void xci_process(xci_ctx_t *ctx) {
 
         hfs0_file_entry_t *cur_file = hfs0_get_file_entry(ctx->partition_ctx.header, i);
         char *cur_name = hfs0_get_file_name(ctx->partition_ctx.header, i);
+
         if (!strcmp(cur_name, "update") && ctx->update_ctx.file == NULL) {
             cur_ctx = &ctx->update_ctx;
         } else if (!strcmp(cur_name, "normal") && ctx->normal_ctx.file == NULL) {
@@ -132,17 +135,16 @@ void xci_process(xci_ctx_t *ctx) {
         hfs0_process(cur_ctx);
     }
 
-
     if (ctx->tool_ctx->action & ACTION_INFO) {
-        xci_print(ctx);
+        xci_print(ctx, Env);
     }
 
     if (ctx->tool_ctx->action & ACTION_EXTRACT) {
-        xci_save(ctx);
+        xci_save(ctx, Env);
     }
 }
 
-void xci_save(xci_ctx_t *ctx) {
+void xci_save(xci_ctx_t *ctx, Napi::Env Env) {
     /* Extract to directory. */
     if (ctx->tool_ctx->settings.out_dir_path.enabled && ctx->tool_ctx->settings.out_dir_path.path.valid == VALIDITY_VALID) {
         printf("Extracting XCI...\n");
@@ -289,7 +291,7 @@ static void xci_print_hfs0(hfs0_ctx_t *ctx) {
     }
 }
 
-void xci_print(xci_ctx_t *ctx) {
+void xci_print(xci_ctx_t *ctx, Napi::Env Env) {
     printf("\nXCI:\n");
     print_magic("Magic:                              ", ctx->header.magic);
 

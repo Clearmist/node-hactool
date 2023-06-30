@@ -10,23 +10,26 @@ void pfs0_process(pfs0_ctx_t *ctx, Napi::Env Env) {
     /* Read *just* safe amount. */
     pfs0_header_t raw_header;
     fseeko64(ctx->file, 0, SEEK_SET);
+
     if (fread(&raw_header, 1, sizeof(raw_header), ctx->file) != sizeof(raw_header)) {
-        throw Napi::Error::New(Env, "Failed to read PFS0 header!");
+        throw Napi::TypeError::New(Env, "Failed to read PFS0 header!");
     }
 
     if (raw_header.magic != MAGIC_PFS0) {
-        throw Napi::Error::New(Env, "PFS0 is corrupt!");
+        throw Napi::TypeError::New(Env, "PFS0 is corrupt!");
     }
 
     uint64_t header_size = pfs0_get_header_size(&raw_header);
     ctx->header = static_cast<pfs0_header_t *>(malloc(header_size));
+
     if (ctx->header == NULL) {
-        throw Napi::Error::New(Env, "Failed to allocate PFS0 header!");
+        throw Napi::TypeError::New(Env, "Failed to allocate PFS0 header!");
     }
 
     fseeko64(ctx->file, 0, SEEK_SET);
+
     if (fread(ctx->header, 1, header_size, ctx->file) != header_size) {
-        throw Napi::Error::New(Env, "Failed to read PFS0 header!");
+        throw Napi::TypeError::New(Env, "Failed to read PFS0 header!");
     }
 
     /* Weak file validation. */
@@ -48,13 +51,13 @@ void pfs0_process(pfs0_ctx_t *ctx, Napi::Env Env) {
             ctx->npdm = static_cast<npdm_t *>(malloc(cur_file->size));
 
             if (ctx->npdm == NULL) {
-                throw Napi::Error::New(Env, "Failed to allocate NPDM!");
+                throw Napi::TypeError::New(Env, "Failed to allocate NPDM!");
             }
 
             fseeko64(ctx->file, pfs0_get_header_size(ctx->header) + cur_file->offset, SEEK_SET);
 
             if (fread(ctx->npdm, 1, cur_file->size, ctx->file) != cur_file->size) {
-                throw Napi::Error::New(Env, "Failed to read NPDM!");
+                throw Napi::TypeError::New(Env, "Failed to read NPDM!");
             }
 
             if (ctx->npdm->magic == MAGIC_META) {

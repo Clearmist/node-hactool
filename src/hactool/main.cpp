@@ -523,7 +523,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
                 } catch (const Napi::TypeError& e) {
                     Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
 
-                    // Do not continue processing this file as a NCA type.
+                    // Do not continue processing this file.
                     break;
                 } catch (const Napi::Error& e) {
                     return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
@@ -550,7 +550,7 @@ char *start(int argc, char **argv, Napi::Env Env) {
             } catch (const Napi::TypeError& e) {
                 Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
 
-                // Do not continue processing this file as a NCA type.
+                // Do not continue processing this file.
                 break;
             } catch (const Napi::Error& e) {
                 return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
@@ -579,8 +579,13 @@ char *start(int argc, char **argv, Napi::Env Env) {
 
             try {
                 pfs0_process(&pfs0_ctx, Env);
+            } catch (const Napi::TypeError& e) {
+                Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
+
+                // Do not continue processing this file.
+                break;
             } catch (const Napi::Error& e) {
-                Napi::Error::New(Env, e.what()).ThrowAsJavaScriptException();
+                return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
             }
 
             if (pfs0_ctx.header) {
@@ -737,7 +742,18 @@ char *start(int argc, char **argv, Napi::Env Env) {
             memset(&xci_ctx, 0, sizeof(xci_ctx));
             xci_ctx.file = tool_ctx.file;
             xci_ctx.tool_ctx = &tool_ctx;
-            xci_process(&xci_ctx);
+
+            try {
+                xci_process(&xci_ctx, Env);
+            } catch (const Napi::TypeError& e) {
+                Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
+
+                // Do not continue processing this file.
+                break;
+            } catch (const Napi::Error& e) {
+                return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
+            }
+
             break;
         }
         case FILETYPE_BOOT0: {
