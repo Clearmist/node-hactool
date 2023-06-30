@@ -331,17 +331,17 @@ static void nca_save(nca_ctx_t *ctx, Napi::Env Env) {
     filepath_t *header_path = &ctx->tool_ctx->settings.header_path;
 
     if (header_path->valid == VALIDITY_VALID) {
-        printf("Saving Header to %s...\n", header_path->char_path);
+        cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Saving Header to {}.", header_path->char_path).data()));
+
         FILE *f_hdr = os_fopen(header_path->os_path, OS_MODE_WRITE);
 
         if (f_hdr != NULL) {
             fwrite(&ctx->header, 1, 0xC00, f_hdr);
             fclose(f_hdr);
         } else {
-            fprintf(stderr, "Failed to open %s!\n", header_path->char_path);
+            cJSON_AddItemToArray(ctx->tool_ctx->warnings, cJSON_CreateString(fmt::format("Failed to open {}.", header_path->char_path).data()));
         }
     }
-
 
     for (unsigned int i = 0; i < 4; i++) {
         if (ctx->section_contexts[i].is_present) {
@@ -353,20 +353,21 @@ static void nca_save(nca_ctx_t *ctx, Napi::Env Env) {
     filepath_t *dec_path = &ctx->tool_ctx->settings.plaintext_path;
 
     if (dec_path->valid == VALIDITY_VALID) {
-        printf("Saving Decrypted NCA to %s...\n", dec_path->char_path);
+        cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Saving decrypted NCA to {}.", dec_path->char_path).data()));
+
         FILE *f_dec = os_fopen(dec_path->os_path, OS_MODE_WRITE);
 
         if (f_dec != NULL) {
             if (fwrite(&ctx->header, 1, 0xC00, f_dec) != 0xC00) {
-                fprintf(stderr, "Failed to write header!\n");
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, "Failed to write header.");
             }
 
             unsigned char *buf = static_cast<unsigned char *>(malloc(0x400000));
+
             if (buf == NULL) {
-                fprintf(stderr, "Failed to allocate file-save buffer!\n");
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, "Failed to allocate file-save buffer.");
             }
+
             for (unsigned int i = 0; i < 4; i++) {
                 if (ctx->section_contexts[i].is_present) {
                     fseeko64(f_dec, ctx->section_contexts[i].offset, SEEK_SET);
@@ -377,16 +378,20 @@ static void nca_save(nca_ctx_t *ctx, Napi::Env Env) {
                     uint64_t ofs = 0;
                     uint64_t end_ofs = ofs + ctx->section_contexts[i].size;
                     nca_section_fseek(&ctx->section_contexts[i], ofs);
+
                     while (ofs < end_ofs) {
-                        if (ofs + read_size >= end_ofs) read_size = end_ofs - ofs;
+                        if (ofs + read_size >= end_ofs) {
+                            read_size = end_ofs - ofs;
+                        }
+
                         if (nca_section_fread(&ctx->section_contexts[i], buf, read_size, Env) != read_size) {
-                            fprintf(stderr, "Failed to read file!\n");
-                            exit(EXIT_FAILURE);
+                            throw Napi::Error::New(Env, "Failed to read file.");
                         }
+
                         if (fwrite(buf, 1, read_size, f_dec) != read_size) {
-                            fprintf(stderr, "Failed to write file!\n");
-                            exit(EXIT_FAILURE);
+                            throw Napi::Error::New(Env, "Failed to write file.");
                         }
+
                         ofs += read_size;
                     }
 
@@ -398,7 +403,7 @@ static void nca_save(nca_ctx_t *ctx, Napi::Env Env) {
 
             free(buf);
         } else {
-            fprintf(stderr, "Failed to open %s!\n", dec_path->char_path);
+            cJSON_AddItemToArray(ctx->tool_ctx->warnings, cJSON_CreateString(fmt::format("Failed to open {}.", dec_path->char_path).data()));
         }
     }
 }
@@ -407,7 +412,7 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
     cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Processing NCA file."));
 
     /* First things first, decrypt header. */
-    if (!nca_decrypt_header(ctx)) {
+    if (!nca_decrypt_header(ctx, Env)) {
         throw Napi::TypeError::New(Env, "Failed to read the NCA header. Are the keys correct?");
     }
 
@@ -586,7 +591,7 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
 }
 
 /* Decrypt NCA header. */
-int nca_decrypt_header(nca_ctx_t *ctx) {
+int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env) {
     fseeko64(ctx->file, 0, SEEK_SET);
 
     size_t read_size = fread(&ctx->header, 1, 0xC00, ctx->file);
@@ -665,8 +670,9 @@ int nca_decrypt_header(nca_ctx_t *ctx) {
                     uint64_t offset = media_to_real(dec_header.section_entries[i].media_start_offset);
                     fseeko64(ctx->tool_ctx->file, offset, SEEK_SET);
                     if (fread(&dec_header.fs_headers[i], sizeof(dec_header.fs_headers[i]), 1, ctx->tool_ctx->file) != 1) {
-                        fprintf(stderr, "Failed to read NCA0 FS header at %" PRIx64"!\n", offset);
-                        exit(EXIT_FAILURE);
+                        cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Failed to read NCA0 FS header at offset {}.", offset).data()));
+
+                        return 0;
                     }
                     aes_xts_decrypt(aes_ctx, &dec_header.fs_headers[i], &dec_header.fs_headers[i], sizeof(dec_header.fs_headers[i]), (offset - 0x400ULL) >> 9ULL, 0x200);
                 }
@@ -941,18 +947,21 @@ static validity_t nca_section_check_external_hash_table(nca_section_ctx_t *ctx, 
         /* Block size of 0 is always invalid. */
         return VALIDITY_INVALID;
     }
+
     unsigned char cur_hash[0x20];
     uint64_t read_size = block_size;
     unsigned char *block = static_cast<unsigned char *>(malloc(block_size));
+
     if (block == NULL) {
-        fprintf(stderr, "Failed to allocate hash block!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to allocate hash block!");
     }
 
     validity_t result = VALIDITY_VALID;
     unsigned char *cur_hash_table_entry = hash_table;
+
     for (uint64_t ofs = 0; ofs < data_len; ofs += read_size) {
         nca_section_fseek(ctx, ofs + data_ofs);
+
         if (ofs + read_size > data_len) {
             /* Last block... */
             memset(block, 0, read_size);
@@ -960,16 +969,19 @@ static validity_t nca_section_check_external_hash_table(nca_section_ctx_t *ctx, 
         }
 
         if (nca_section_fread(ctx, block, read_size, Env) != read_size) {
-            fprintf(stderr, "Failed to read section!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read NCA section!");
         }
+
         sha256_hash_buffer(cur_hash, block, full_block ? block_size : read_size);
+
         if (memcmp(cur_hash, cur_hash_table_entry, 0x20) != 0) {
             result = VALIDITY_INVALID;
             break;
         }
+
         cur_hash_table_entry += 0x20;
     }
+
     free(block);
 
     return result;
@@ -980,19 +992,24 @@ static validity_t nca_section_check_hash_table(nca_section_ctx_t *ctx, uint64_t 
         /* Block size of 0 is always invalid. */
         return VALIDITY_INVALID;
     }
+
     uint64_t hash_table_size = data_len / block_size;
-    if (data_len % block_size) hash_table_size++;
+
+    if (data_len % block_size) {
+        hash_table_size++;
+    }
+
     hash_table_size *= 0x20;
     unsigned char *hash_table = static_cast<unsigned char *>(malloc(hash_table_size));
+
     if (hash_table == NULL) {
-        fprintf(stderr, "Failed to allocate hash table!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to allocate hash table!");
     }
 
     nca_section_fseek(ctx, hash_ofs);
+
     if (nca_section_fread(ctx, hash_table, hash_table_size, Env) != hash_table_size) {
-        fprintf(stderr, "Failed to read section!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to read NCA section!");
     }
 
     validity_t result = nca_section_check_external_hash_table(ctx, hash_table, data_ofs, data_len, block_size, full_block, Env);
@@ -1004,25 +1021,25 @@ static validity_t nca_section_check_hash_table(nca_section_ctx_t *ctx, uint64_t 
 
 static void nca_save_pfs0_file(nca_section_ctx_t *ctx, uint32_t i, filepath_t *dirpath, Napi::Env Env) {
     if (i >= ctx->pfs0_ctx.header->num_files) {
-        fprintf(stderr, "Could not save file %" PRId32 "!\n", i);
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, fmt::format("Could not save PFS0 file {}.", i).data());
     }
+
     pfs0_file_entry_t *cur_file = pfs0_get_file_entry(ctx->pfs0_ctx.header, i);
+
     if (cur_file->size >= ctx->size) {
-        fprintf(stderr, "File %" PRId32 " too big in PFS0 (section %" PRId32 ")!\n", i, ctx->section_num);
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, fmt::format("File {} is too big in PFS0 section {}.", i, ctx->section_num).data());
     }
 
     if (strlen(pfs0_get_file_name(ctx->pfs0_ctx.header, i)) >= MAX_PATH - strlen(dirpath->char_path) - 1) {
-        fprintf(stderr, "Filename too long in PFS0!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, fmt::format("File {} filename is too long in PFS0 section {}.", i, ctx->section_num).data());
     }
 
     filepath_t filepath;
     filepath_copy(&filepath, dirpath);
     filepath_append(&filepath, "%s", pfs0_get_file_name(ctx->pfs0_ctx.header, i));
 
-    printf("Saving %s to %s...\n", pfs0_get_file_name(ctx->pfs0_ctx.header, i), filepath.char_path);
+    cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Saving {} to {}.", pfs0_get_file_name(ctx->pfs0_ctx.header, i), filepath.char_path).data()));
+
     uint64_t ofs = ctx->pfs0_ctx.superblock->pfs0_offset + pfs0_get_header_size(ctx->pfs0_ctx.header) + cur_file->offset;
     nca_save_section_file(ctx, ofs, cur_file->size, &filepath, Env);
 }
@@ -1030,51 +1047,56 @@ static void nca_save_pfs0_file(nca_section_ctx_t *ctx, uint32_t i, filepath_t *d
 void nca_process_pfs0_section(nca_section_ctx_t *ctx, Napi::Env Env) {
     pfs0_superblock_t *sb = ctx->pfs0_ctx.superblock;
     ctx->superblock_hash_validity = nca_section_check_external_hash_table(ctx, sb->master_hash, sb->hash_table_offset, sb->hash_table_size, sb->hash_table_size, 0, Env);
+
     if (ctx->tool_ctx->action & ACTION_VERIFY) {
         /* Verify actual PFS0... */
         ctx->pfs0_ctx.hash_table_validity = nca_section_check_hash_table(ctx, sb->hash_table_offset, sb->pfs0_offset, sb->pfs0_size, sb->block_size, 0, Env);
     }
 
-    if (ctx->superblock_hash_validity != VALIDITY_VALID) return;
+    if (ctx->superblock_hash_validity != VALIDITY_VALID) {
+        return;
+    }
 
     /* Read *just* safe amount. */
     pfs0_header_t raw_header;
     nca_section_fseek(ctx, sb->pfs0_offset);
+
     if (nca_section_fread(ctx, &raw_header, sizeof(raw_header), Env) != sizeof(raw_header)) {
-        fprintf(stderr, "Failed to read PFS0 header!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to read PFS0 header.");
     }
 
     uint64_t header_size = pfs0_get_header_size(&raw_header);
     ctx->pfs0_ctx.header = static_cast<pfs0_header_t *>(malloc(header_size));
+
     if (ctx->pfs0_ctx.header == NULL) {
-        fprintf(stderr, "Failed to get PFS0 header size!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to get PFS0 header size.");
     }
+
     nca_section_fseek(ctx, sb->pfs0_offset);
+
     if (nca_section_fread(ctx, ctx->pfs0_ctx.header, header_size, Env) != header_size) {
-        fprintf(stderr, "Failed to read PFS0 header!\n");
-        exit(EXIT_FAILURE);
+        throw Napi::Error::New(Env, "Failed to read PFS0 header.");
     }
 
     for (unsigned int i = 0; i < ctx->pfs0_ctx.header->num_files; i++) {
         pfs0_file_entry_t *cur_file = pfs0_get_file_entry(ctx->pfs0_ctx.header, i);
+
         if (strcmp(pfs0_get_file_name(ctx->pfs0_ctx.header, i), "main.npdm") == 0) {
             /* We might have found the exefs... */
             if (cur_file->size >= sb->pfs0_size) {
-                fprintf(stderr, "NPDM too big!\n");
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, "NPDM too big.");
             }
 
             ctx->pfs0_ctx.npdm = static_cast<npdm_t *>(malloc(cur_file->size));
+
             if (ctx->pfs0_ctx.npdm == NULL) {
-                fprintf(stderr, "Failed to allocate NPDM!\n");
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, "Failed to allocate NPDM.");
             }
+
             nca_section_fseek(ctx, sb->pfs0_offset + pfs0_get_header_size(ctx->pfs0_ctx.header) + cur_file->offset);
+
             if (nca_section_fread(ctx, ctx->pfs0_ctx.npdm, cur_file->size, Env) != cur_file->size) {
-                fprintf(stderr, "Failed to read NPDM!\n");
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, "Failed to read NPDM.");
             }
 
             if (ctx->pfs0_ctx.npdm->magic == MAGIC_META) {
@@ -1086,6 +1108,7 @@ void nca_process_pfs0_section(nca_section_ctx_t *ctx, Napi::Env Env) {
 
 void nca_process_ivfc_section(nca_section_ctx_t *ctx, Napi::Env Env) {
     romfs_superblock_t *sb = ctx->romfs_ctx.superblock;
+
     for (unsigned int i = 0; i < IVFC_MAX_LEVEL; i++) {
         /* Load in the current level's header data. */
         ivfc_level_ctx_t *cur_level = &ctx->romfs_ctx.ivfc_levels[i];
@@ -1101,42 +1124,46 @@ void nca_process_ivfc_section(nca_section_ctx_t *ctx, Napi::Env Env) {
             ctx->superblock_hash_validity = nca_section_check_external_hash_table(ctx, sb->ivfc_header.master_hash, cur_level->data_offset, cur_level->data_size, cur_level->hash_block_size, 1, Env);
             cur_level->hash_validity = ctx->superblock_hash_validity;
         }
+
         if (ctx->tool_ctx->action & ACTION_VERIFY && i != 0) {
             /* Actually check the table. */
-            printf("    Verifying IVFC Level %" PRId32 "...\n", i);
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Verifying IVFC Level", i).data()));
+
             cur_level->hash_validity = nca_section_check_hash_table(ctx, cur_level->hash_offset, cur_level->data_offset, cur_level->data_size, cur_level->hash_block_size, 1, Env);
         }
     }
 
     ctx->romfs_ctx.romfs_offset = ctx->romfs_ctx.ivfc_levels[IVFC_MAX_LEVEL - 1].data_offset;
     nca_section_fseek(ctx, ctx->romfs_ctx.romfs_offset);
+
     if (nca_section_fread(ctx, &ctx->romfs_ctx.header, sizeof(romfs_hdr_t), Env) != sizeof(romfs_hdr_t)) {
-        fprintf(stderr, "Failed to read RomFS header!\n");
+        cJSON_AddItemToArray(ctx->tool_ctx->warnings, cJSON_CreateString("Failed to read RomFS header"));
     }
 
     if ((ctx->tool_ctx->action & (ACTION_EXTRACT | ACTION_LISTROMFS)) && ctx->romfs_ctx.header.header_size == ROMFS_HEADER_SIZE) {
         /* Pre-load the file/data entry caches. */
         ctx->romfs_ctx.directories = static_cast<romfs_direntry_t *>(calloc(1, ctx->romfs_ctx.header.dir_meta_table_size));
+
         if (ctx->romfs_ctx.directories == NULL) {
-            fprintf(stderr, "Failed to allocate RomFS directory cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate RomFS directory cache.");
         }
 
         nca_section_fseek(ctx, ctx->romfs_ctx.romfs_offset + ctx->romfs_ctx.header.dir_meta_table_offset);
+
         if (nca_section_fread(ctx, ctx->romfs_ctx.directories, ctx->romfs_ctx.header.dir_meta_table_size, Env) != ctx->romfs_ctx.header.dir_meta_table_size) {
-            fprintf(stderr, "Failed to read RomFS directory cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read RomFS directory cache.");
         }
 
         ctx->romfs_ctx.files = static_cast<romfs_fentry_t *>(calloc(1, ctx->romfs_ctx.header.file_meta_table_size));
+
         if (ctx->romfs_ctx.files == NULL) {
-            fprintf(stderr, "Failed to allocate RomFS file cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate RomFS file cache.");
         }
+
         nca_section_fseek(ctx, ctx->romfs_ctx.romfs_offset + ctx->romfs_ctx.header.file_meta_table_offset);
+
         if (nca_section_fread(ctx, ctx->romfs_ctx.files, ctx->romfs_ctx.header.file_meta_table_size, Env) != ctx->romfs_ctx.header.file_meta_table_size) {
-            fprintf(stderr, "Failed to read RomFS file cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read RomFS file cache.");
         }
     }
 }
@@ -1144,76 +1171,85 @@ void nca_process_ivfc_section(nca_section_ctx_t *ctx, Napi::Env Env) {
 void nca_process_nca0_romfs_section(nca_section_ctx_t *ctx, Napi::Env Env) {
     nca0_romfs_superblock_t *sb = ctx->nca0_romfs_ctx.superblock;
     ctx->superblock_hash_validity = nca_section_check_external_hash_table(ctx, sb->master_hash, sb->hash_table_offset, sb->hash_table_size, sb->hash_table_size, 0, Env);
+
     if (ctx->tool_ctx->action & ACTION_VERIFY) {
         /* Verify actual ROMFS... */
         ctx->nca0_romfs_ctx.hash_table_validity = nca_section_check_hash_table(ctx, sb->hash_table_offset, sb->romfs_offset, sb->romfs_size, sb->block_size, 0, Env);
     }
 
-    if (ctx->superblock_hash_validity != VALIDITY_VALID) return;
+    if (ctx->superblock_hash_validity != VALIDITY_VALID) {
+        return;
+    }
 
     ctx->nca0_romfs_ctx.romfs_offset = sb->romfs_offset;
     nca_section_fseek(ctx, ctx->nca0_romfs_ctx.romfs_offset);
+
     if (nca_section_fread(ctx, &ctx->nca0_romfs_ctx.header, sizeof(nca0_romfs_hdr_t), Env) != sizeof(nca0_romfs_hdr_t)) {
-        fprintf(stderr, "Failed to read NCA0 RomFS header!\n");
+        cJSON_AddItemToArray(ctx->tool_ctx->warnings, cJSON_CreateString("Failed to read NCA0 RomFS header."));
     }
 
     if ((ctx->tool_ctx->action & (ACTION_EXTRACT | ACTION_LISTROMFS)) && ctx->nca0_romfs_ctx.header.header_size == NCA0_ROMFS_HEADER_SIZE) {
         /* Pre-load the file/data entry caches. */
         ctx->nca0_romfs_ctx.directories = static_cast<romfs_direntry_t *>(calloc(1, ctx->nca0_romfs_ctx.header.dir_meta_table_size));
+
         if (ctx->nca0_romfs_ctx.directories == NULL) {
-            fprintf(stderr, "Failed to allocate NCA0 RomFS directory cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate NCA0 RomFS directory cache.");
         }
 
         nca_section_fseek(ctx, ctx->nca0_romfs_ctx.romfs_offset + ctx->nca0_romfs_ctx.header.dir_meta_table_offset);
+
         if (nca_section_fread(ctx, ctx->nca0_romfs_ctx.directories, ctx->nca0_romfs_ctx.header.dir_meta_table_size, Env) != ctx->nca0_romfs_ctx.header.dir_meta_table_size) {
-            fprintf(stderr, "Failed to read NCA0 RomFS directory cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read NCA0 RomFS directory cache.");
         }
 
         ctx->nca0_romfs_ctx.files = static_cast<romfs_fentry_t *>(calloc(1, ctx->nca0_romfs_ctx.header.file_meta_table_size));
+
         if (ctx->nca0_romfs_ctx.files == NULL) {
-            fprintf(stderr, "Failed to allocate NCA0 RomFS file cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate NCA0 RomFS file cache.");
         }
+
         nca_section_fseek(ctx, ctx->nca0_romfs_ctx.romfs_offset + ctx->nca0_romfs_ctx.header.file_meta_table_offset);
+
         if (nca_section_fread(ctx, ctx->nca0_romfs_ctx.files, ctx->nca0_romfs_ctx.header.file_meta_table_size, Env) != ctx->nca0_romfs_ctx.header.file_meta_table_size) {
-            fprintf(stderr, "Failed to read NCA0 RomFS file cache!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read NCA0 RomFS file cache.");
         }
     }
 }
 
 void nca_process_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env) {
     bktr_superblock_t *sb = ctx->bktr_ctx.superblock;
+
     /* Validate magics. */
     if (sb->relocation_header.magic == MAGIC_BKTR && sb->subsection_header.magic == MAGIC_BKTR) {
-        if (sb->relocation_header.offset + sb->relocation_header.size != sb->subsection_header.offset ||
-            sb->subsection_header.offset + sb->subsection_header.size != ctx->size) {
-            fprintf(stderr, "Invalid BKTR layout!\n");
-            exit(EXIT_FAILURE);
+        if (sb->relocation_header.offset + sb->relocation_header.size != sb->subsection_header.offset || sb->subsection_header.offset + sb->subsection_header.size != ctx->size) {
+
+            throw Napi::Error::New(Env, "Invalid BKTR layout.");
         }
+
         /* Allocate space for an extra (fake) relocation entry, to simplify our logic. */
         void *relocs = calloc(1, sb->relocation_header.size + (0x3FF0 / sizeof(uint64_t)) * sizeof(bktr_relocation_entry_t));
+
         if (relocs == NULL) {
-            fprintf(stderr, "Failed to allocate relocation header!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate relocation header.");
         }
+
         /* Allocate space for an extra (fake) subsection entry, to simplify our logic. */
         void *subs = calloc(1, sb->subsection_header.size + (0x3FF0 / sizeof(uint64_t)) * sizeof(bktr_subsection_entry_t) + sizeof(bktr_subsection_entry_t));
+
         if (subs == NULL) {
-            fprintf(stderr, "Failed to allocate subsection header!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to allocate subsection header.");
         }
+
         nca_section_fseek(ctx, sb->relocation_header.offset);
+
         if (nca_section_fread(ctx, relocs, sb->relocation_header.size, Env) != sb->relocation_header.size) {
-            fprintf(stderr, "Failed to read relocation header!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read relocation header.");
         }
+
         nca_section_fseek(ctx, sb->subsection_header.offset);
+
         if (nca_section_fread(ctx, subs, sb->subsection_header.size, Env) != sb->subsection_header.size) {
-            fprintf(stderr, "Failed to read subsection header!\n");
-            exit(EXIT_FAILURE);
+            throw Napi::Error::New(Env, "Failed to read subsection header.");
         }
 
         /* NOTE: Setting these variables changes the way fseek/fread work! */
@@ -1233,19 +1269,23 @@ void nca_process_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env) {
         for (unsigned int i = ctx->bktr_ctx.relocation_block->num_buckets - 1; i > 0; i--) {
             memcpy(bktr_get_relocation_bucket(ctx->bktr_ctx.relocation_block, i), &ctx->bktr_ctx.relocation_block->buckets[i], sizeof(bktr_relocation_bucket_t));
         }
+
         for (unsigned int i = 0; i + 1 < ctx->bktr_ctx.relocation_block->num_buckets; i++) {
             bktr_relocation_bucket_t *cur_bucket = bktr_get_relocation_bucket(ctx->bktr_ctx.relocation_block, i);
             cur_bucket->entries[cur_bucket->num_entries].virt_offset = ctx->bktr_ctx.relocation_block->bucket_virtual_offsets[i + 1];
         }
+
         for (unsigned int i = ctx->bktr_ctx.subsection_block->num_buckets - 1; i > 0; i--) {
             memcpy(bktr_get_subsection_bucket(ctx->bktr_ctx.subsection_block, i), &ctx->bktr_ctx.subsection_block->buckets[i], sizeof(bktr_subsection_bucket_t));
         }
+
         for (unsigned int i = 0; i + 1 < ctx->bktr_ctx.subsection_block->num_buckets; i++) {
             bktr_subsection_bucket_t *cur_bucket = bktr_get_subsection_bucket(ctx->bktr_ctx.subsection_block, i);
             bktr_subsection_bucket_t *next_bucket = bktr_get_subsection_bucket(ctx->bktr_ctx.subsection_block, i+1);
             cur_bucket->entries[cur_bucket->num_entries].offset = next_bucket->entries[0].offset;
             cur_bucket->entries[cur_bucket->num_entries].ctr_val = next_bucket->entries[0].ctr_val;
         }
+
         bktr_relocation_bucket_t *last_reloc_bucket = bktr_get_relocation_bucket(ctx->bktr_ctx.relocation_block, ctx->bktr_ctx.relocation_block->num_buckets - 1);
         bktr_subsection_bucket_t *last_subsec_bucket = bktr_get_subsection_bucket(ctx->bktr_ctx.subsection_block, ctx->bktr_ctx.subsection_block->num_buckets - 1);
         last_reloc_bucket->entries[last_reloc_bucket->num_entries].virt_offset = ctx->bktr_ctx.relocation_block->total_size;
@@ -1270,6 +1310,7 @@ void nca_process_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env) {
                 ctx->superblock_hash_validity = nca_section_check_external_hash_table(ctx, sb->ivfc_header.master_hash, cur_level->data_offset, cur_level->data_size, cur_level->hash_block_size, 1, Env);
                 cur_level->hash_validity = ctx->superblock_hash_validity;
             }
+
             if (ctx->tool_ctx->action & ACTION_VERIFY && i != 0) {
                 /* Actually check the table. */
                 cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Verifying IVFC Level %{}", i).data()));
@@ -1279,34 +1320,38 @@ void nca_process_bktr_section(nca_section_ctx_t *ctx, Napi::Env Env) {
         }
 
         ctx->bktr_ctx.romfs_offset = ctx->bktr_ctx.ivfc_levels[IVFC_MAX_LEVEL - 1].data_offset;
+
         if (ctx->tool_ctx->base_file != NULL) {
             nca_section_fseek(ctx, ctx->bktr_ctx.romfs_offset);
+
             if (nca_section_fread(ctx, &ctx->bktr_ctx.header, sizeof(romfs_hdr_t), Env) != sizeof(romfs_hdr_t)) {
-                fprintf(stderr, "Failed to read BKTR Virtual RomFS header!\n");
+                cJSON_AddItemToArray(ctx->tool_ctx->warnings, cJSON_CreateString("Failed to read BKTR Virtual RomFS header."));
             }
 
             if ((ctx->tool_ctx->action & (ACTION_EXTRACT | ACTION_LISTROMFS)) && ctx->bktr_ctx.header.header_size == ROMFS_HEADER_SIZE) {
                 /* Pre-load the file/data entry caches. */
                 ctx->bktr_ctx.directories = static_cast<romfs_direntry_t *>(calloc(1, ctx->bktr_ctx.header.dir_meta_table_size));
+
                 if (ctx->bktr_ctx.directories == NULL) {
-                    fprintf(stderr, "Failed to allocate RomFS directory cache!\n");
-                    exit(EXIT_FAILURE);
+                    throw Napi::Error::New(Env, "Failed to allocate RomFS directory cache.");
                 }
 
                 nca_section_fseek(ctx, ctx->bktr_ctx.romfs_offset + ctx->bktr_ctx.header.dir_meta_table_offset);
+
                 if (nca_section_fread(ctx, ctx->bktr_ctx.directories, ctx->bktr_ctx.header.dir_meta_table_size, Env) != ctx->bktr_ctx.header.dir_meta_table_size) {
-                    fprintf(stderr, "Failed to read RomFS directory cache!\n");
-                    exit(EXIT_FAILURE);
+                    throw Napi::Error::New(Env, "Failed to read RomFS directory cache.");
                 }
+
                 ctx->bktr_ctx.files = static_cast<romfs_fentry_t *>(calloc(1, ctx->bktr_ctx.header.file_meta_table_size));
+
                 if (ctx->bktr_ctx.files == NULL) {
-                    fprintf(stderr, "Failed to allocate RomFS file cache!\n");
-                    exit(EXIT_FAILURE);
+                    throw Napi::Error::New(Env, "Failed to allocate RomFS file cache.");
                 }
+
                 nca_section_fseek(ctx, ctx->bktr_ctx.romfs_offset + ctx->bktr_ctx.header.file_meta_table_offset);
+
                 if (nca_section_fread(ctx, ctx->bktr_ctx.files, ctx->bktr_ctx.header.file_meta_table_size, Env) != ctx->bktr_ctx.header.file_meta_table_size) {
-                    fprintf(stderr, "Failed to read RomFS file cache!\n");
-                    exit(EXIT_FAILURE);
+                    throw Napi::Error::New(Env, "Failed to read RomFS file cache.");
                 }
             }
         }
@@ -1341,17 +1386,24 @@ void nca_print_pfs0_section(nca_section_ctx_t *ctx, cJSON *section) {
 }
 
 void nca_print_ivfc_section(nca_section_ctx_t *ctx, cJSON *section) {
+    cJSON *superblock = cJSON_CreateObject();
+    cJSON_AddItemToObject(section, "superblock", superblock);
+
     if (ctx->tool_ctx->action & ACTION_VERIFY) {
         if (ctx->superblock_hash_validity == VALIDITY_VALID) {
-            memdump(stdout, "        Superblock Hash (GOOD):     ",  &ctx->romfs_ctx.superblock->ivfc_header.master_hash, 0x20);
+            cJSON_AddItemToObject(superblock, "status", cJSON_CreateString("good"));
         } else {
-            memdump(stdout, "        Superblock Hash (FAIL):     ",  &ctx->romfs_ctx.superblock->ivfc_header.master_hash, 0x20);
+            cJSON_AddItemToObject(superblock, "status", cJSON_CreateString("fail"));
         }
     } else {
-            memdump(stdout, "        Superblock Hash:            ", &ctx->romfs_ctx.superblock->ivfc_header.master_hash, 0x20);
+        cJSON_AddItemToObject(superblock, "status", cJSON_CreateString(""));
     }
-    print_magic("        Magic:                      ", ctx->romfs_ctx.superblock->ivfc_header.magic);
-    printf("        ID:                         %08" PRIx32 "\n", ctx->romfs_ctx.superblock->ivfc_header.id);
+
+    cJSON_AddItemToObject(superblock, "hash", cJSON_CreateString(memdump_return(ctx->romfs_ctx.superblock->ivfc_header.master_hash, 0x20)));
+
+    cJSON_AddItemToObject(section, "magic", cJSON_CreateString(return_magic(ctx->romfs_ctx.superblock->ivfc_header.magic)));
+    cJSON_AddItemToObject(section, "id", cJSON_CreateString(fmt::format("{:08X}", ctx->romfs_ctx.superblock->ivfc_header.id).data()));
+
     for (unsigned int i = 0; i < IVFC_MAX_LEVEL; i++) {
         if (ctx->tool_ctx->action & ACTION_VERIFY) {
             printf("        Level %" PRId32 " (%s):\n", i, GET_VALIDITY_STR(ctx->romfs_ctx.ivfc_levels[i].hash_validity));
@@ -1377,6 +1429,7 @@ void nca_print_nca0_romfs_section(nca_section_ctx_t *ctx, cJSON *section) {
         memdump(stdout, "        Superblock Hash:            ", &ctx->nca0_romfs_ctx.superblock->master_hash, 0x20);
         printf("        Hash Table:\n");
     }
+
     printf("            Offset:                 %012" PRIx64 "\n", ctx->nca0_romfs_ctx.superblock->hash_table_offset);
     printf("            Size:                   %012" PRIx64 "\n", ctx->nca0_romfs_ctx.superblock->hash_table_size);
     printf("            Block Size:             0x%" PRIx32 "\n", ctx->nca0_romfs_ctx.superblock->block_size);
@@ -1389,7 +1442,9 @@ void nca_print_bktr_section(nca_section_ctx_t *ctx, cJSON *section) {
         printf("        BKTR section seems to be corrupted.\n");
         return;
     }
+
     int did_verify = (ctx->tool_ctx->action & ACTION_VERIFY) && (ctx->tool_ctx->base_file != NULL);
+
     if (did_verify ) {
         if (ctx->superblock_hash_validity == VALIDITY_VALID) {
             memdump(stdout, "        Superblock Hash (GOOD):     ",  &ctx->bktr_ctx.superblock->ivfc_header.master_hash, 0x20);
@@ -1399,8 +1454,10 @@ void nca_print_bktr_section(nca_section_ctx_t *ctx, cJSON *section) {
     } else {
             memdump(stdout, "        Superblock Hash:            ", &ctx->bktr_ctx.superblock->ivfc_header.master_hash, 0x20);
     }
+
     print_magic("        Magic:                      ", ctx->bktr_ctx.superblock->ivfc_header.magic);
     printf("        ID:                         %08" PRIx32 "\n", ctx->bktr_ctx.superblock->ivfc_header.id);
+
     for (unsigned int i = 0; i < IVFC_MAX_LEVEL; i++) {
         if (did_verify) {
             printf("        Level %" PRId32 " (%s):\n", i, GET_VALIDITY_STR(ctx->bktr_ctx.ivfc_levels[i].hash_validity));

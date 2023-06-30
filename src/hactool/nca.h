@@ -193,7 +193,7 @@ typedef struct nca_ctx {
 
 void nca_init(nca_ctx_t *ctx);
 void nca_process(nca_ctx_t *ctx, Napi::Env Env);
-int nca_decrypt_header(nca_ctx_t *ctx);
+int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env);
 void nca_decrypt_key_area(nca_ctx_t *ctx);
 void nca_print(nca_ctx_t *ctx);
 
