@@ -466,12 +466,14 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
     } else {
         /* Decrypt title key. */
         aes_ctx_t *aes_ctx = new_aes_ctx(ctx->tool_ctx->settings.keyset.titlekeks[ctx->crypto_type], 16, AES_MODE_ECB);
+
         if (ctx->is_cli_target && ctx->tool_ctx->settings.has_cli_titlekey) {
             aes_decrypt(aes_ctx, ctx->tool_ctx->settings.dec_cli_titlekey, ctx->tool_ctx->settings.cli_titlekey, 0x10);
         } else if (settings_has_titlekey(&ctx->tool_ctx->settings, ctx->header.rights_id)) {
             titlekey_entry_t *entry = settings_get_titlekey(&ctx->tool_ctx->settings, ctx->header.rights_id);
             aes_decrypt(aes_ctx, entry->dec_titlekey, entry->titlekey, 0x10);
         }
+
         free_aes_ctx(aes_ctx);
     }
 
@@ -487,9 +489,11 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
             ctx->section_contexts[i].size = media_to_real(ctx->header.section_entries[i].media_end_offset) - ctx->section_contexts[i].offset;
             ctx->section_contexts[i].header = &ctx->header.fs_headers[i];
             ctx->section_contexts[i].crypt_type = static_cast<section_crypt_type_t>(ctx->section_contexts[i].header->crypt_type);
+
             if (ctx->format_version == NCAVERSION_NCA0 || ctx->format_version == NCAVERSION_NCA0_BETA) {
                 ctx->section_contexts[i].crypt_type = CRYPT_NCA0;
             }
+
             if (ctx->section_contexts[i].header->partition_type == PARTITION_PFS0 && ctx->section_contexts[i].header->fs_type == FS_TYPE_PFS0) {
                 ctx->section_contexts[i].type = PFS0;
                 ctx->section_contexts[i].pfs0_ctx.superblock = &ctx->section_contexts[i].header->pfs0_superblock;
@@ -507,12 +511,15 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
             } else {
                 ctx->section_contexts[i].type = INVALID;
             }
+
             uint64_t ofs = ctx->section_contexts[i].offset >> 4;
+
             for (unsigned int j = 0; j < 0x8; j++) {
                 ctx->section_contexts[i].ctr[j] = ctx->section_contexts[i].header->section_ctr[0x8-j-1];
                 ctx->section_contexts[i].ctr[0x10-j-1] = (unsigned char)(ofs & 0xFF);
                 ofs >>= 8;
             }
+
             ctx->section_contexts[i].sector_num = 0;
             ctx->section_contexts[i].sector_ofs = 0;
 
@@ -543,6 +550,7 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
                         ctx->section_contexts[i].aes = new_aes_ctx(ctx->decrypted_keys, 32, AES_MODE_XTS);
                         ctx->section_contexts[i].sector_size = 0x200ULL;
                     }
+
                     if (ctx->section_contexts[i].sector_size) {
                         ctx->section_contexts[i].sector_mask = ctx->section_contexts[i].sector_size - 1ULL;
                     }
@@ -552,9 +560,11 @@ void nca_process(nca_ctx_t *ctx, Napi::Env Env) {
             if (ctx->tool_ctx->action & ACTION_VERIFY) {
                 cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString(fmt::format("Verifying section {}.", i).data()));
             }
+
             switch (ctx->section_contexts[i].type) {
                 case PFS0:
                     nca_process_pfs0_section(&ctx->section_contexts[i], Env);
+
                     /* Verify NPDM sig now, if we can... */
                     if (ctx->section_contexts[i].pfs0_ctx.is_exefs) {
                         ctx->npdm = ctx->section_contexts[i].pfs0_ctx.npdm;
@@ -604,11 +614,13 @@ int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env) {
     if (ctx->header.magic == MAGIC_NCA3 || ctx->header.magic == MAGIC_NCA2) {
         if (ctx->header._0x340[0] == 0 && !memcmp(ctx->header._0x340, ctx->header._0x340 + 1, 0xBF)) {
             ctx->is_decrypted = 1;
+
             if (ctx->header.magic == MAGIC_NCA3) {
                 ctx->format_version = NCAVERSION_NCA3;
             } else {
                 ctx->format_version = NCAVERSION_NCA2;
             }
+
             return 1;
         }
     }
@@ -630,6 +642,7 @@ int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env) {
         ctx->header = dec_header;
     } else if (dec_header.magic == MAGIC_NCA2) {
         ctx->format_version = NCAVERSION_NCA2;
+
         for (unsigned int i = 0; i < 4; i++) {
             if (dec_header.fs_headers[i]._0x148[0] != 0 || memcmp(dec_header.fs_headers[i]._0x148, dec_header.fs_headers[i]._0x148 + 1, 0xB7)) {
                 aes_xts_decrypt(hdr_aes_ctx, &dec_header.fs_headers[i], &ctx->header.fs_headers[i], 0x200, 0, 0x200);
@@ -637,6 +650,7 @@ int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env) {
                 memset(&dec_header.fs_headers[i], 0, sizeof(nca_fs_header_t));
             }
         }
+
         ctx->header = dec_header;
     } else if (dec_header.magic == MAGIC_NCA0) {
         memset(ctx->decrypted_keys, 0, 0x40);
@@ -662,6 +676,7 @@ int nca_decrypt_header(nca_ctx_t *ctx, Napi::Env Env) {
                 free_aes_ctx(aes_ctx);
             }
         }
+
         if (ctx->format_version != NCAVERSION_UNKNOWN) {
             memset(dec_header.fs_headers, 0, sizeof(dec_header.fs_headers));
             aes_ctx_t *aes_ctx = new_aes_ctx(ctx->decrypted_keys, 32, AES_MODE_XTS);

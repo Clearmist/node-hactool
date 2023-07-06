@@ -1,4 +1,6 @@
 #include <string.h>
+#define FMT_HEADER_ONLY
+#include <fmt/core.h>
 #include "rsa.h"
 #include "aes.h"
 #include "xci.h"
@@ -26,6 +28,8 @@ static const unsigned char xci_header_pubk[0x100] = {
 };
 
 void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
+    cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Processing XCI file."));
+
     fseeko64(ctx->file, 0, SEEK_SET);
 
     if (fread(&ctx->header, 1, 0x200, ctx->file) != 0x200) {
@@ -100,7 +104,7 @@ void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
     ctx->partition_ctx.tool_ctx = &blank_ctx;
     ctx->partition_ctx.name = "rootpt";
     ctx->partition_ctx.hash_suffix = NULL;
-    hfs0_process(&ctx->partition_ctx);
+    hfs0_process(&ctx->partition_ctx, Env);
 
     if (ctx->partition_ctx.header->num_files > 4) {
         throw Napi::TypeError::New(Env, "Invalid XCI partition (The number of files is greater than 4).");
@@ -123,8 +127,7 @@ void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
         }
 
         if (cur_ctx == NULL) {
-            fprintf(stderr, "Unknown XCI partition: %s\n", cur_name);
-            exit(EXIT_FAILURE);
+            throw Napi::TypeError::New(Env, fmt::format("Unknown XCI partition {}.", cur_name).data());
         }
 
         cur_ctx->name = cur_name;
@@ -132,7 +135,7 @@ void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
         cur_ctx->tool_ctx = &blank_ctx;
         cur_ctx->file = ctx->file;
         cur_ctx->hash_suffix = NULL;
-        hfs0_process(cur_ctx);
+        hfs0_process(cur_ctx, Env);
     }
 
     if (ctx->tool_ctx->action & ACTION_INFO) {
@@ -145,15 +148,21 @@ void xci_process(xci_ctx_t *ctx, Napi::Env Env) {
 }
 
 void xci_save(xci_ctx_t *ctx, Napi::Env Env) {
+    cJSON *extracted_files = cJSON_CreateArray();
+    cJSON_AddItemToObject(ctx->tool_ctx->output, "extracted", extracted_files);
+
     /* Extract to directory. */
     if (ctx->tool_ctx->settings.out_dir_path.enabled && ctx->tool_ctx->settings.out_dir_path.path.valid == VALIDITY_VALID) {
-        printf("Extracting XCI...\n");
+        cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Extracting XCI."));
+
         filepath_t *dirpath = &ctx->tool_ctx->settings.out_dir_path.path;
         os_makedir(dirpath->os_path);
+
         for (unsigned int i = 0; i < ctx->partition_ctx.header->num_files; i++) {
             hfs0_ctx_t *cur_ctx = NULL;
 
             char *cur_name = hfs0_get_file_name(ctx->partition_ctx.header, i);
+
             if (!strcmp(cur_name, "update")) {
                 cur_ctx = &ctx->update_ctx;
             } else if (!strcmp(cur_name, "normal")) {
@@ -163,70 +172,133 @@ void xci_save(xci_ctx_t *ctx, Napi::Env Env) {
             } else if (!strcmp(cur_name, "logo")) {
                 cur_ctx = &ctx->logo_ctx;
             }
+
             if (cur_ctx == NULL) {
-                fprintf(stderr, "Unknown XCI partition found in extraction: %s\n", cur_name);
-                exit(EXIT_FAILURE);
+                throw Napi::Error::New(Env, fmt::format("Unknown XCI partition found in extraction", cur_name).data());
             }
+
+            bool single = ctx->tool_ctx->settings.single_file.enabled;
+
             filepath_t partition_dirpath;
             filepath_copy(&partition_dirpath, dirpath);
-
             filepath_append(&partition_dirpath, "%s", cur_name);
-            os_makedir(partition_dirpath.os_path);
+
+            if (!single) {
+                os_makedir(partition_dirpath.os_path);
+            }
+
             for (uint32_t i = 0; i < cur_ctx->header->num_files; i++) {
-                hfs0_save_file(cur_ctx, i, &partition_dirpath);
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(cur_ctx->header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(cur_ctx, i, single ? dirpath : &partition_dirpath, Env, file_details);
+                }
             }
         }
     } else {
         /* Save Root Partition. */
         if (ctx->tool_ctx->settings.rootpt_dir_path.valid == VALIDITY_VALID) {
-            printf("Saving Root Partition...\n");
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Saving root partition."));
+
             os_makedir(ctx->tool_ctx->settings.rootpt_dir_path.os_path);
+
             for (uint32_t i = 0; i < ctx->partition_ctx.header->num_files; i++) {
-                hfs0_save_file(&ctx->partition_ctx, i, &ctx->tool_ctx->settings.rootpt_dir_path);
+                bool single = ctx->tool_ctx->settings.single_file.enabled;
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(ctx->partition_ctx.header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(&ctx->partition_ctx, i, &ctx->tool_ctx->settings.rootpt_dir_path, Env, file_details);
+                }
             }
-            printf("\n");
         }
+
         /* Save Update Partition. */
         if (ctx->tool_ctx->settings.update_dir_path.valid == VALIDITY_VALID) {
-             printf("Saving Update Partition...\n");
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Saving update partition."));
+
             os_makedir(ctx->tool_ctx->settings.update_dir_path.os_path);
+
             for (uint32_t i = 0; i < ctx->update_ctx.header->num_files; i++) {
-                hfs0_save_file(&ctx->update_ctx, i, &ctx->tool_ctx->settings.update_dir_path);
+                bool single = ctx->tool_ctx->settings.single_file.enabled;
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(ctx->update_ctx.header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(&ctx->update_ctx, i, &ctx->tool_ctx->settings.update_dir_path, Env, file_details);
+                }
             }
-            printf("\n");
         }
+
         /* Save Normal Partition. */
         if (ctx->tool_ctx->settings.normal_dir_path.valid == VALIDITY_VALID) {
-             printf("Saving Normal Partition...\n");
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Saving normal partition."));
+
             os_makedir(ctx->tool_ctx->settings.normal_dir_path.os_path);
+
             for (uint32_t i = 0; i < ctx->normal_ctx.header->num_files; i++) {
-                hfs0_save_file(&ctx->normal_ctx, i, &ctx->tool_ctx->settings.normal_dir_path);
+                bool single = ctx->tool_ctx->settings.single_file.enabled;
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(ctx->normal_ctx.header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(&ctx->normal_ctx, i, &ctx->tool_ctx->settings.normal_dir_path, Env, file_details);
+                }
             }
-            printf("\n");
         }
+
         /* Save Secure Partition. */
         if (ctx->tool_ctx->settings.secure_dir_path.valid == VALIDITY_VALID) {
-            printf("Saving Secure Partition...\n");
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Saving secure partition."));
+
             os_makedir(ctx->tool_ctx->settings.secure_dir_path.os_path);
+
             for (uint32_t i = 0; i < ctx->secure_ctx.header->num_files; i++) {
-                hfs0_save_file(&ctx->secure_ctx, i, &ctx->tool_ctx->settings.secure_dir_path);
+                bool single = ctx->tool_ctx->settings.single_file.enabled;
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(ctx->secure_ctx.header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(&ctx->secure_ctx, i, &ctx->tool_ctx->settings.secure_dir_path, Env, file_details);
+                }
             }
-            printf("\n");
         }
+
         /* Save Logo Partition. */
         if (ctx->tool_ctx->settings.logo_dir_path.valid == VALIDITY_VALID) {
-            printf("Saving Logo Partition...\n");
+            cJSON_AddItemToArray(ctx->tool_ctx->log, cJSON_CreateString("Saving logo partition."));
+
             os_makedir(ctx->tool_ctx->settings.logo_dir_path.os_path);
+
             for (uint32_t i = 0; i < ctx->logo_ctx.header->num_files; i++) {
-                hfs0_save_file(&ctx->logo_ctx, i, &ctx->tool_ctx->settings.logo_dir_path);
+                bool single = ctx->tool_ctx->settings.single_file.enabled;
+                bool found = strcmp(ctx->tool_ctx->settings.single_file.path.char_path, hfs0_get_file_name(ctx->logo_ctx.header, i)) == 0;
+
+                if (!single || (single && found)) {
+                    cJSON *file_details = cJSON_CreateObject();
+                    cJSON_AddItemToArray(extracted_files, file_details);
+
+                    hfs0_save_file(&ctx->logo_ctx, i, &ctx->tool_ctx->settings.logo_dir_path, Env, file_details);
+                }
             }
-            printf("\n");
         }
     }
 }
 
 static const char *xci_get_cartridge_type(xci_ctx_t *ctx) {
     cartridge_type_t cart_type = (cartridge_type_t)ctx->header.cart_type;
+
     switch (cart_type) {
         case CARTSIZE_2GB: return "2GB";
         case CARTSIZE_4GB: return "4GB";
@@ -239,6 +311,7 @@ static const char *xci_get_cartridge_type(xci_ctx_t *ctx) {
 
 static const char *xci_get_firmware_type(xci_gamecard_info_t *gc_info) {
     gamecard_firmware_version_t firmware_ver = (gamecard_firmware_version_t)gc_info->firmware_version;
+
     switch (firmware_ver) {
         case GC_FIRMWARE_DEVELOPMENT: return "Development";
         case GC_FIRMWARE_RETAIL_100: return "Retail (1.0.0+)";
@@ -250,6 +323,7 @@ static const char *xci_get_firmware_type(xci_gamecard_info_t *gc_info) {
 
 static const char *xci_get_access_control_type(xci_gamecard_info_t *gc_info) {
     gamecard_access_control_t access_control = (gamecard_access_control_t)gc_info->access_control;
+
     switch (access_control) {
         case GC_ACCESS_CONTROL_25MHZ: return "25MHz";
         case GC_ACCESS_CONTROL_50MHZ: return "50MHz";
@@ -260,6 +334,7 @@ static const char *xci_get_access_control_type(xci_gamecard_info_t *gc_info) {
 
 static const char *xci_get_region_compatibility_type_name(uint8_t _type) {
     xci_region_compatibility_t compatibility_type = (xci_region_compatibility_t)_type;
+
     switch (compatibility_type) {
         case COMPAT_GLOBAL: return "Global";
         case COMPAT_CHINA: return "China";
@@ -272,93 +347,130 @@ static const char *xci_get_region_compatibility_type(xci_gamecard_info_t *gc_inf
     return xci_get_region_compatibility_type_name(gc_info->compatibility_type);
 }
 
-static void xci_print_hfs0(hfs0_ctx_t *ctx) {
-    print_magic("    Magic:                          ", ctx->header->magic);
-    printf("    Offset:                         %012" PRIx64 "\n", ctx->offset);
-    printf("    Number of files:                %" PRId32 "\n", ctx->header->num_files);
+static void xci_print_hfs0(hfs0_ctx_t *ctx, cJSON *files, cJSON *partition) {
+    cJSON_AddItemToObject(partition, "magic", cJSON_CreateString(return_magic(ctx->header->magic)));
+    cJSON_AddItemToObject(partition, "offset", cJSON_CreateString(fmt::format("{:012X}", ctx->offset).data()));
+
+    cJSON *partitionFiles = cJSON_CreateArray();
+    cJSON_AddItemToObject(partition, "files", partitionFiles);
 
     if (ctx->header->num_files > 0 && (ctx->header->num_files < 100 || ctx->tool_ctx->action & ACTION_VERIFY)) {
-        printf("    Files:");
         for (unsigned int i = 0; i < ctx->header->num_files; i++) {
             hfs0_file_entry_t *cur_file = hfs0_get_file_entry(ctx->header, i);
-            if (ctx->tool_ctx->action & ACTION_VERIFY) {
-                validity_t hash_validity = check_memory_hash_table_with_suffix(ctx->file, cur_file->hash, ctx->offset + hfs0_get_header_size(ctx->header) + cur_file->offset, cur_file->hashed_size, cur_file->hashed_size, ctx->hash_suffix, 0);
-                printf("%s%s:/%-48s %012" PRIx64 "-%012" PRIx64 " (%s)\n", i == 0 ? "                          " : "                                    ", ctx->name == NULL ? "hfs0" : ctx->name, hfs0_get_file_name(ctx->header, i), cur_file->offset, cur_file->offset + cur_file->size, GET_VALIDITY_STR(hash_validity));
-            } else {
-                printf("%s%s:/%-48s %012" PRIx64 "-%012" PRIx64 "\n", i == 0 ? "                          " : "                                    ", ctx->name == NULL ? "hfs0" : ctx->name, hfs0_get_file_name(ctx->header, i), cur_file->offset, cur_file->offset + cur_file->size);
-            }
+
+            cJSON *details = cJSON_CreateObject();
+            cJSON_AddItemToArray(partitionFiles, details);
+
+            cJSON *detailsCopy = cJSON_CreateObject();
+            cJSON_AddItemToArray(files, detailsCopy);
+
+            validity_t hash_validity = check_memory_hash_table_with_suffix(ctx->file, cur_file->hash, ctx->offset + hfs0_get_header_size(ctx->header) + cur_file->offset, cur_file->hashed_size, cur_file->hashed_size, ctx->hash_suffix, 0);
+
+            cJSON_AddItemToObject(details, "status", cJSON_CreateString(GET_VALIDITY_STR(hash_validity)));
+            cJSON_AddItemToObject(details, "name", cJSON_CreateString(hfs0_get_file_name(ctx->header, i)));
+            cJSON_AddItemToObject(details, "path", cJSON_CreateString(fmt::format("{}:/{}", ctx->name == NULL ? "hfs0" : ctx->name, hfs0_get_file_name(ctx->header, i)).data()));
+            cJSON_AddItemToObject(details, "offsetStart", cJSON_CreateNumber(cur_file->offset));
+            cJSON_AddItemToObject(details, "offsetEnd", cJSON_CreateNumber(cur_file->offset + cur_file->size));
+
+            cJSON_AddItemToObject(detailsCopy, "status", cJSON_CreateString(GET_VALIDITY_STR(hash_validity)));
+            cJSON_AddItemToObject(detailsCopy, "name", cJSON_CreateString(hfs0_get_file_name(ctx->header, i)));
+            cJSON_AddItemToObject(detailsCopy, "path", cJSON_CreateString(fmt::format("{}:/{}", ctx->name == NULL ? "hfs0" : ctx->name, hfs0_get_file_name(ctx->header, i)).data()));
+            cJSON_AddItemToObject(detailsCopy, "offsetStart", cJSON_CreateNumber(cur_file->offset));
+            cJSON_AddItemToObject(detailsCopy, "offsetEnd", cJSON_CreateNumber(cur_file->offset + cur_file->size));
         }
     }
 }
 
 void xci_print(xci_ctx_t *ctx, Napi::Env Env) {
-    printf("\nXCI:\n");
-    print_magic("Magic:                              ", ctx->header.magic);
+    // Create an object to hold the archive details.
+    cJSON *archive_details = cJSON_CreateObject();
+    cJSON_AddItemToObject(ctx->tool_ctx->output, "archive", archive_details);
+
+    cJSON *header = cJSON_CreateObject();
+    cJSON_AddItemToObject(archive_details, "header", header);
+    cJSON *headerSignature = cJSON_CreateObject();
+    cJSON_AddItemToObject(header, "headerSignature", headerSignature);
 
     if (ctx->tool_ctx->action & ACTION_VERIFY) {
         if (ctx->header_sig_validity == VALIDITY_VALID) {
-            memdump(stdout, "Header Signature (GOOD):            ", &ctx->header.header_sig, 0x100);
+            cJSON_AddItemToObject(headerSignature, "status", cJSON_CreateString("good"));
         } else {
-            memdump(stdout, "Header Signature (FAIL):            ", &ctx->header.header_sig, 0x100);
+            cJSON_AddItemToObject(headerSignature, "status", cJSON_CreateString("fail"));
         }
     } else {
-        memdump(stdout, "Header Signature:                   ", &ctx->header.header_sig, 0x100);
+        cJSON_AddItemToObject(headerSignature, "status", cJSON_CreateString(""));
     }
 
-    printf("Cartridge Type:                     %s\n", xci_get_cartridge_type(ctx));
-    printf("Cartridge Size:                     %012" PRIx64 "\n", media_to_real(ctx->header.cart_size + 1));
+    cJSON *cartridge = cJSON_CreateObject();
+    cJSON_AddItemToObject(archive_details, "cartridge", cartridge);
+    cJSON_AddItemToObject(cartridge, "type", cJSON_CreateString(xci_get_cartridge_type(ctx)));
+    cJSON_AddItemToObject(cartridge, "size", cJSON_CreateString(fmt::format("{:012X}", media_to_real(ctx->header.cart_size + 1)).data()));
 
-    memdump(stdout, "Header IV:                          ", ctx->iv, 0x10);
-    memdump(stdout, "Encrypted Header:                   ", ctx->header.encrypted_data, 0x70);
+    cJSON_AddItemToObject(archive_details, "magic", cJSON_CreateString(return_magic(ctx->header.magic)));
+    cJSON_AddItemToObject(header, "IV", cJSON_CreateString(memdump_return(ctx->iv, 0x10)));
+    cJSON_AddItemToObject(header, "encrypted", cJSON_CreateString(memdump_return(ctx->header.encrypted_data, 0x70)));
 
     if (ctx->has_fake_compat_type || !ctx->has_decrypted_header) {
-        printf("Encrypted Header Data:\n");
-        printf("    Compatibility Type:             %s\n", xci_get_region_compatibility_type_name(ctx->fake_compat_type));
+        cJSON_AddItemToObject(header, "compatibilityType", cJSON_CreateString(xci_get_region_compatibility_type_name(ctx->fake_compat_type)));
     }
 
     if (ctx->has_decrypted_header) {
         xci_gamecard_info_t *gc_info = (xci_gamecard_info_t*)(ctx->decrypted_header + 0x10);
-        printf("Encrypted Header Data:\n");
-        printf("    Firmware Version:               %s\n", xci_get_firmware_type(gc_info));
-        printf("    Access Control:                 %s\n", xci_get_access_control_type(gc_info));
-        printf("    Read Time Wait1:                %08" PRIx32 "\n", gc_info->read_time_wait_1);
-        printf("    Read Time Wait2:                %08" PRIx32 "\n", gc_info->read_time_wait_2);
-        printf("    Write Time Wait1:               %08" PRIx32 "\n", gc_info->write_time_wait_1);
-        printf("    Write Time Wait2:               %08" PRIx32 "\n", gc_info->write_time_wait_2);
-        printf("    Firmware Mode:                  %08" PRIx32 "\n", gc_info->firmware_mode);
 
-        // decode version
+        cJSON_AddItemToObject(header, "firmwareVersion", cJSON_CreateString(xci_get_firmware_type(gc_info)));
+        cJSON_AddItemToObject(header, "accessControl", cJSON_CreateString(xci_get_access_control_type(gc_info)));
+        cJSON_AddItemToObject(header, "readTimeWait1", cJSON_CreateString(fmt::format("{:08X}", gc_info->read_time_wait_1).data()));
+        cJSON_AddItemToObject(header, "readTimeWait2", cJSON_CreateString(fmt::format("{:08X}", gc_info->read_time_wait_2).data()));
+        cJSON_AddItemToObject(header, "writeTimeWait1", cJSON_CreateString(fmt::format("{:08X}", gc_info->write_time_wait_1).data()));
+        cJSON_AddItemToObject(header, "writeTimeWait2", cJSON_CreateString(fmt::format("{:08X}", gc_info->write_time_wait_2).data()));
+        cJSON_AddItemToObject(header, "firmwareMode", cJSON_CreateString(fmt::format("{:08X}", gc_info->firmware_mode).data()));
+
+        // Decode version.
         uint32_t ver[4] = {0};
         ver[0] = ((gc_info->cup_version >> 26) & 0x3f);
         ver[1] = ((gc_info->cup_version >> 20) & 0x3f);
         ver[2] = ((gc_info->cup_version >> 16) & 0xf);
         ver[3] = (gc_info->cup_version & 0xffff);
 
-        printf("    CUP Version                     v%d.%d.%d-%d\n", ver[0], ver[1], ver[2], ver[3]);
-        printf("    Compatibility Type:             %s\n", xci_get_region_compatibility_type(gc_info));
-        memdump(stdout, "    Update Hash                     ", gc_info->update_partition_hash, 8);
-        printf("    CUP TitleId:                    %016" PRIx64 "\n", gc_info->cup_title_id);
+        cJSON_AddItemToObject(header, "CUPVersion", cJSON_CreateString(fmt::format("{}.{}.{}-{}", ver[0], ver[1], ver[2], ver[3]).data()));
+        cJSON_AddItemToObject(header, "CUPTitleId", cJSON_CreateString(fmt::format("{:016X}", gc_info->cup_title_id).data()));
+        cJSON_AddItemToObject(header, "compatibilityType", cJSON_CreateString(xci_get_region_compatibility_type(gc_info)));
+        cJSON_AddItemToObject(header, "updateHash", cJSON_CreateString(memdump_return(gc_info->update_partition_hash, 8)));
     }
 
-    if (ctx->tool_ctx->action & ACTION_VERIFY) {
-        printf("Root Partition (%s):\n", GET_VALIDITY_STR(ctx->hfs0_hash_validity));
-    } else {
-        printf("Root Partition:\n");
-    }
-    xci_print_hfs0(&ctx->partition_ctx);
+    cJSON *files = cJSON_CreateArray();
+    cJSON_AddItemToObject(archive_details, "files", files);
 
-    printf("Update Partition:\n");
-    xci_print_hfs0(&ctx->update_ctx);
+    cJSON *partitions = cJSON_CreateObject();
+    cJSON_AddItemToObject(archive_details, "partitions", partitions);
 
-    printf("Normal Partition:\n");
-    xci_print_hfs0(&ctx->normal_ctx);
+    cJSON *rootPartition = cJSON_CreateObject();
+    cJSON_AddItemToObject(partitions, "root", rootPartition);
 
-    printf("Secure Partition:\n");
-    xci_print_hfs0(&ctx->secure_ctx);
+    cJSON_AddItemToObject(rootPartition, "status", cJSON_CreateString(GET_VALIDITY_STR(ctx->hfs0_hash_validity)));
+
+    xci_print_hfs0(&ctx->partition_ctx, files, rootPartition);
+
+    cJSON *updatePartition = cJSON_CreateObject();
+    cJSON_AddItemToObject(partitions, "update", updatePartition);
+
+    xci_print_hfs0(&ctx->update_ctx, files, updatePartition);
+
+    cJSON *normalPartition = cJSON_CreateObject();
+    cJSON_AddItemToObject(partitions, "normal", normalPartition);
+
+    xci_print_hfs0(&ctx->normal_ctx, files, normalPartition);
+
+    cJSON *securePartition = cJSON_CreateObject();
+    cJSON_AddItemToObject(partitions, "secure", securePartition);
+
+    xci_print_hfs0(&ctx->secure_ctx, files, securePartition);
 
     /* Ensure that Logo partition exists. */
     if (ctx->partition_ctx.header->num_files == 4) {
-        printf("Logo Partition:\n");
-        xci_print_hfs0(&ctx->logo_ctx);
+        cJSON *logoPartition = cJSON_CreateObject();
+        cJSON_AddItemToObject(partitions, "logo", logoPartition);
+
+        xci_print_hfs0(&ctx->logo_ctx, files, logoPartition);
     }
 }

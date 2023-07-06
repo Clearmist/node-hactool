@@ -50,10 +50,10 @@ static inline char *hfs0_get_file_name(hfs0_header_t *hdr, uint32_t i) {
     return hfs0_get_string_table(hdr) + hfs0_get_file_entry(hdr, i)->string_table_offset;
 }
 
-void hfs0_process(hfs0_ctx_t *ctx);
-void hfs0_save(hfs0_ctx_t *ctx);
-void hfs0_print(hfs0_ctx_t *ctx);
+void hfs0_process(hfs0_ctx_t *ctx, Napi::Env Env);
+void hfs0_save(hfs0_ctx_t *ctx, Napi::Env Env);
+void hfs0_print(hfs0_ctx_t *ctx, Napi::Env Env);
 
-void hfs0_save_file(hfs0_ctx_t *ctx, uint32_t i, filepath_t *dirpath);
+void hfs0_save_file(hfs0_ctx_t *ctx, uint32_t i, filepath_t *dirpath, Napi::Env Env, cJSON *file_details);
 
 #endif

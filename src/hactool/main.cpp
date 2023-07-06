@@ -666,7 +666,17 @@ char *start(int argc, char **argv, Napi::Env Env) {
             memset(&hfs0_ctx, 0, sizeof(hfs0_ctx));
             hfs0_ctx.file = tool_ctx.file;
             hfs0_ctx.tool_ctx = &tool_ctx;
-            hfs0_process(&hfs0_ctx);
+
+            try {
+                hfs0_process(&hfs0_ctx, Env);
+            } catch (const Napi::TypeError& e) {
+                Napi::TypeError::New(Env, e.what()).ThrowAsJavaScriptException();
+
+                // Do not continue processing this file.
+                break;
+            } catch (const Napi::Error& e) {
+                return stop(nca_ctx.tool_ctx, const_cast<char *>(e.what()));
+            }
 
             if (hfs0_ctx.header) {
                 free(hfs0_ctx.header);
